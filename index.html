@@ -98,7 +98,7 @@
         </h1>
 
         <div id="authStatus" class="text-sm text-center mb-4 p-2 bg-blue-900 text-blue-300 rounded-lg">
-            Authenticating...
+            লগইন করা হচ্ছে...
         </div>
         
         <div id="audioStatus" class="text-sm text-center mb-4 p-2 bg-pink-900 text-pink-300 rounded-lg hidden">
@@ -154,16 +154,25 @@
             serverTimestamp, setLogLevel
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
-        // Tone.js Import (Available globally since imported via script tag, but for module scope)
-        // Note: Using the global Tone object loaded above.
-        
         // Set log level for debugging
         setLogLevel('Debug');
 
-        // --- GLOBAL VARIABLES (Provided by Canvas) ---
+        // --- GLOBAL VARIABLES (Canvas Environment) ---
+        // Canvas পরিবেশ থেকে Firebase কনফিগারেশন এবং অ্যাপ আইডি লোড করা হচ্ছে।
+        
+        // অ্যাপ আইডি লোড করা হচ্ছে (Canvas বা ডিফল্ট)
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-tictactoe-app';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        let firebaseConfig = null;
+        try {
+            // Canvas থেকে Firebase কনফিগারেশন JSON স্ট্রিং হিসাবে লোড করা
+            firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        } catch (e) {
+            console.error("Failed to parse __firebase_config:", e);
+        }
+
+        // ইনিশিয়াল অথ টোকেন লোড করা হচ্ছে
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null; 
 
         // --- FIREBASE SETUP ---
         let app;
@@ -450,6 +459,9 @@
                          games.push({ id: doc.id, ...data });
                     }
                 });
+                // Note: Sorting is done here in JS, not Firestore, to avoid index requirements.
+                games.sort((a, b) => (b.lastMoveTime?.seconds || 0) - (a.lastMoveTime?.seconds || 0));
+                
                 renderGamesList(games);
             }, (error) => {
                 console.error("Error fetching games:", error);
@@ -601,37 +613,36 @@
         // --- AUTHENTICATION & INITIALIZATION ---
 
         async function initAuth() {
+            // Check if Firebase config is missing (only relevant if not running in Canvas and user forgot to set fallbacks)
+            if (!firebaseConfig || !firebaseConfig.apiKey) {
+                const message = 'গুরুত্বপূর্ণ ERROR: Firebase কনফিগারেশন লোড করা হয়নি। কনফিগারেশন অনুপস্থিত। অ্যাপ আইডি: ' + appId;
+                authStatusEl.textContent = message;
+                authStatusEl.classList.remove('bg-blue-900');
+                authStatusEl.classList.add('bg-red-900', 'text-red-300');
+                console.error(message);
+                return;
+            }
+
             try {
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
             } catch (error) {
                 console.error("Firebase initialization error:", error);
-                authStatusEl.textContent = 'ERROR: Firebase শুরু করতে ব্যর্থ হয়েছে।';
-                return;
+                authStatusEl.textContent = 'গুরুত্বপূর্ণ ERROR: Firebase শুরু করতে ব্যর্থ হয়েছে।';
+                authStatusEl.classList.remove('bg-blue-900');
+                authStatusEl.classList.add('bg-red-900', 'text-red-300');
+                return; 
             }
             
             authStatusEl.textContent = 'লগইন করা হচ্ছে...';
             
-            if (initialAuthToken) {
-                await signInWithCustomToken(auth, initialAuthToken).catch(e => {
-                    console.warn("Custom token sign-in failed, falling back to anonymous.", e);
-                    return signInAnonymously(auth);
-                });
-            } else {
-                await signInAnonymously(auth);
-            }
-        }
-
-        window.onload = async function() {
-            initAudio(); // Initialize audio components
-            await initAuth();
-
-            // Listen for auth state changes
+            // Listen for auth state changes ONLY AFTER 'auth' is successfully initialized
             onAuthStateChanged(auth, (user) => {
                 if (user) {
                     userId = user.uid;
                     currentUserIdEl.textContent = userId;
+                    
                     authStatusEl.textContent = 'সফলভাবে লগইন করা হয়েছে।';
                     authStatusEl.classList.remove('bg-blue-900', 'text-blue-300');
                     authStatusEl.classList.add('bg-green-900', 'text-green-300');
@@ -639,15 +650,30 @@
                     createGameBtn.disabled = false;
                     createGameBtn.addEventListener('click', createGame);
 
-                    loadGamesListener();
+                    loadGamesListener(); // Start loading games list
 
                 } else {
                     userId = null;
                     currentUserIdEl.textContent = '...';
-                    authStatusEl.textContent = 'লগইন প্রয়োজন।';
+                    // Only update status if no fatal error occurred earlier
+                    if (authStatusEl.textContent.indexOf('ERROR') === -1) {
+                         authStatusEl.textContent = 'লগইন প্রয়োজন।';
+                    }
                     createGameBtn.disabled = true;
                 }
             });
+
+            // Sign in using custom token if available, otherwise anonymously
+            if (initialAuthToken) {
+                await signInWithCustomToken(auth, initialAuthToken);
+            } else {
+                await signInAnonymously(auth);
+            }
+        }
+
+        window.onload = async function() {
+            initAudio(); // Initialize audio components
+            await initAuth(); // Start the entire auth process
         }
     </script>
 </body>
